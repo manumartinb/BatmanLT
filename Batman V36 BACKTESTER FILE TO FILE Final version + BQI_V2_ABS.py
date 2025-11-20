@@ -1426,7 +1426,7 @@ def compare_mid_values(mid_fwd, mid_base):
     except Exception:
         return "ERROR"
 
-def batman_value_from_df(one_min_df: pd.DataFrame, exp1: str, k1: float, exp2: str, k2: float, k3: float, root1=None, root2=None):
+def batman_value_from_df(one_min_df: pd.DataFrame, exp1: str, k1: float, exp2: str, k2: float, k3: float, root1=None, root2=None, current_date_str=None):
     """
     Revaloriza estructura Batman: -1C@k1(exp1) +2C@k2(exp2) -1C@k3(exp1)
 
@@ -1439,9 +1439,11 @@ def batman_value_from_df(one_min_df: pd.DataFrame, exp1: str, k1: float, exp2: s
         k3: Strike de segunda call corta
         root1: Root esperado para exp1 (SPX/SPXW)
         root2: Root esperado para exp2 (SPX/SPXW)
+        current_date_str: Fecha actual en formato "YYYY-MM-DD" para calcular DTEs e IVs (opcional)
 
     Returns:
-        dict con net_credit (puntos SPX), leg1/leg2/leg3 (bid/ask/mid/root/strike)
+        dict con net_credit (puntos SPX), leg1/leg2/leg3 (bid/ask/mid/root/strike/iv),
+        spot, dte1, dte2 (si current_date_str proporcionado)
         o None si no se puede revalorizar
     """
     def _to_float(val):
@@ -1534,12 +1536,64 @@ def batman_value_from_df(one_min_df: pd.DataFrame, exp1: str, k1: float, exp2: s
         # CREDIT negativo = cobramos (favorable)
         net_credit = float(-mid1 + 2*mid2 - mid3)
 
-        return {
+        result = {
             "net_credit": net_credit,
             "leg1": leg1,
             "leg2": leg2,
             "leg3": leg3
         }
+
+        # Si se proporcionó current_date_str, calcular IVs y DTEs
+        if current_date_str is not None:
+            try:
+                # Obtener spot (underlying price)
+                spot = underlying_from_slice(one_min_df)
+
+                if np.isfinite(spot) and spot > 0:
+                    # Calcular DTEs
+                    dte_map = compute_dte_map([exp1, exp2], current_date_str)
+                    dte1 = dte_map.get(exp1, 0)
+                    dte2 = dte_map.get(exp2, 0)
+
+                    # Calcular tiempos en años
+                    T1 = max(dte1, 1) / 365.0
+                    T2 = max(dte2, 1) / 365.0
+
+                    # Calcular IVs desde precios mid usando implied_vol_call_from_price
+                    r = RISK_FREE_R
+                    q = 0.0
+
+                    iv1 = implied_vol_call_from_price(spot, float(k1), T1, r, q, mid1)
+                    iv2 = implied_vol_call_from_price(spot, float(k2), T2, r, q, mid2)
+                    iv3 = implied_vol_call_from_price(spot, float(k3), T1, r, q, mid3)
+
+                    # Limpiar NaN a None para consistencia
+                    iv1 = None if (iv1 is None or (isinstance(iv1, float) and (math.isnan(iv1) or iv1 <= 0))) else float(iv1)
+                    iv2 = None if (iv2 is None or (isinstance(iv2, float) and (math.isnan(iv2) or iv2 <= 0))) else float(iv2)
+                    iv3 = None if (iv3 is None or (isinstance(iv3, float) and (math.isnan(iv3) or iv3 <= 0))) else float(iv3)
+
+                    # Agregar IVs a las patas
+                    leg1["iv"] = iv1
+                    leg2["iv"] = iv2
+                    leg3["iv"] = iv3
+
+                    # Agregar datos adicionales al resultado
+                    result["spot"] = spot
+                    result["dte1"] = dte1
+                    result["dte2"] = dte2
+                else:
+                    # Spot inválido, agregar None
+                    leg1["iv"] = None
+                    leg2["iv"] = None
+                    leg3["iv"] = None
+                    result["spot"] = None
+                    result["dte1"] = None
+                    result["dte2"] = None
+            except Exception:
+                # En caso de error, no agregar IVs (mantener compatibilidad)
+                pass
+
+        return result
     except Exception:
         return None
 
@@ -1719,6 +1773,92 @@ def compute_FF_BAT(IV2_K2, T2_years, IV1_K1, IV1_K3, T1_years, vega_K1, vega_K3,
     except Exception as e:
         # En caso de cualquier error, retornar NaN silenciosamente
         return np.nan
+
+# ================== PNLDV FORWARD (Death Valley en momento FWD) ==================
+def compute_pnldv_forward(k1, k2, k3, iv1, iv2, iv3, dte1_fwd, dte2_fwd, r_base, net_credit_base):
+    """
+    Calcula Death Valley y PnLDV en un momento forward.
+
+    Esta función replica el cálculo de Death Valley (líneas 1848-1866 de compute_strategy_metrics)
+    pero aplicado a un momento futuro (forward) con DTEs reducidos e IVs actualizadas.
+
+    Args:
+        k1, k2, k3: Strikes del Batman (k1 < k2 < k3)
+        iv1, iv2, iv3: IVs forward de las 3 patas en el momento FWD
+        dte1_fwd: DTE1 en el momento forward (días restantes hasta exp1)
+        dte2_fwd: DTE2 en el momento forward (días restantes hasta exp2)
+        r_base: Tasa libre de riesgo anual (decimal, ej: 0.04 para 4%)
+        net_credit_base: Crédito neto inicial del Batman (puntos SPX, del momento t=0)
+
+    Returns:
+        dict: {
+            'death_valley_fwd': float,  # Punto Death Valley forward (o NaN si fuera del spread)
+            'pnldv_fwd': float,          # PnL en Death Valley (puntos SPX)
+            'tau_fwd': float             # Diferencia temporal T2-T1 (años)
+        }
+
+    Notas:
+        - Si iv2 es None/NaN o tau_fwd <= 0, retorna None para death_valley_fwd y pnldv_fwd
+        - El cálculo asume estructura Batman: -1C@k1(T1) +2C@k2(T2) -1C@k3(T1)
+        - Death Valley es el punto donde la estructura tiene máxima pérdida al vencimiento T1
+    """
+    try:
+        # Calcular tiempos en años
+        T1_fwd = max(dte1_fwd, 1) / 365.0
+        T2_fwd = max(dte2_fwd, 1) / 365.0
+        tau_fwd = max(T2_fwd - T1_fwd, 0.0)
+
+        # Validar parámetros
+        if tau_fwd <= 0 or iv2 is None or (isinstance(iv2, float) and (math.isnan(iv2) or iv2 <= 0)):
+            return {
+                'death_valley_fwd': None,
+                'pnldv_fwd': None,
+                'tau_fwd': tau_fwd
+            }
+
+        sigma2 = float(iv2)
+
+        # Calcular Death Valley forward (punto de máxima pérdida al vencimiento T1)
+        # Fórmula: S0 = K2 * exp(-(r + 0.5*σ²) * τ)
+        S0_fwd = float(k2) * math.exp(-(r_base + 0.5 * sigma2**2) * tau_fwd)
+
+        k_lo, k_hi = (min(k1, k3), max(k1, k3))
+
+        if (S0_fwd >= k_lo) and (S0_fwd < k_hi):
+            # Death Valley dentro del spread [k1, k3]
+            # Valor de las patas al vencimiento T1 con spot en S0_fwd:
+            val_short1 = -max(0.0, S0_fwd - float(k1))  # -1C@k1 vencida
+            val_short3 = -max(0.0, S0_fwd - float(k3))  # -1C@k3 vencida
+            # +2C@k2 sigue viva con tiempo restante tau_fwd
+            val_long2 = 2.0 * bs_call_price(S0_fwd, float(k2), tau_fwd, r_base, sigma2, q=0.0)
+
+            value_t1_fwd = val_short1 + val_short3 + val_long2
+            pnldv_fwd = value_t1_fwd - net_credit_base
+
+            return {
+                'death_valley_fwd': round(S0_fwd, 2),
+                'pnldv_fwd': round(pnldv_fwd, 2),
+                'tau_fwd': round(tau_fwd, 6)
+            }
+        else:
+            # Death Valley fuera del spread (límite plano)
+            # Valor límite: (K1 + K3) - 2*K2*exp(-r*τ)
+            value_lim = (float(k1) + float(k3)) - 2.0 * float(k2) * math.exp(-r_base * tau_fwd)
+            pnldv_fwd = value_lim - net_credit_base
+
+            return {
+                'death_valley_fwd': float('nan'),
+                'pnldv_fwd': round(pnldv_fwd, 2),
+                'tau_fwd': round(tau_fwd, 6)
+            }
+
+    except Exception as e:
+        # En caso de error, retornar None
+        return {
+            'death_valley_fwd': None,
+            'pnldv_fwd': None,
+            'tau_fwd': None
+        }
 
 # ================== CÁLCULO ESTRATEGIA ==================
 def compute_strategy_metrics(spot,r_base,exp1,dte1,k1,exp2,dte2,k2,k3,precache):
@@ -2073,6 +2213,7 @@ def _process_one_fwd_batman(args):
             # Acumuladores para mediana sobre 14 timestamps
             pnl_pts_list = []
             pnl_pct_list = []
+            pnldv_fwd_list = []  # Acumulador para PnLDV forward
 
             # Variables para guardar el primer timestamp válido (columnas originales)
             first_valid_timestamp = None
@@ -2083,6 +2224,7 @@ def _process_one_fwd_batman(args):
             first_dia_fwd = None
             first_hora_fwd = None
             first_leg_data = {}
+            first_pnldv_fwd = None  # Primer PnLDV forward (sin mediana)
 
             # ============================================================
             # LOOP: Evaluar estructura en los 14 timestamps fijos
@@ -2097,14 +2239,15 @@ def _process_one_fwd_batman(args):
 
                 timestamps_found += 1
 
-                # Revalorizar batman en este timestamp
+                # Revalorizar batman en este timestamp (con cálculo de IVs y DTEs)
                 bv_details = batman_value_from_df(
                     fwd_one_min,
                     str(row_dict["exp1"]), float(row_dict["k1"]),
                     str(row_dict["exp2"]), float(row_dict["k2"]),
                     float(row_dict["k3"]),
                     root1=base_root_exp1_norm,
-                    root2=base_root_exp2_norm
+                    root2=base_root_exp2_norm,
+                    current_date_str=fwd_date_str_us  # Pasar fecha para calcular IVs y DTEs
                 )
 
                 if not bv_details or not np.isfinite(bv_details.get("net_credit", np.nan)):
@@ -2124,12 +2267,46 @@ def _process_one_fwd_batman(args):
                     pct = (pnl_pts / denom_pts) * 100.0
                     pnl_pct_list.append(pct)
 
+                # ============================================================
+                # CALCULAR PnLDV FORWARD (Death Valley en momento FWD)
+                # ============================================================
+                # Extraer IVs y DTEs calculados por batman_value_from_df
+                iv1_fwd = bv_details.get("leg1", {}).get("iv") if bv_details.get("leg1") else None
+                iv2_fwd = bv_details.get("leg2", {}).get("iv") if bv_details.get("leg2") else None
+                iv3_fwd = bv_details.get("leg3", {}).get("iv") if bv_details.get("leg3") else None
+                dte1_fwd = bv_details.get("dte1")
+                dte2_fwd = bv_details.get("dte2")
+
+                # Calcular PnLDV forward si tenemos todos los datos necesarios
+                if (iv1_fwd is not None and iv2_fwd is not None and iv3_fwd is not None and
+                    dte1_fwd is not None and dte2_fwd is not None):
+                    pnldv_result = compute_pnldv_forward(
+                        float(row_dict["k1"]),
+                        float(row_dict["k2"]),
+                        float(row_dict["k3"]),
+                        iv1_fwd,
+                        iv2_fwd,
+                        iv3_fwd,
+                        dte1_fwd,
+                        dte2_fwd,
+                        RISK_FREE_R,
+                        base_credit
+                    )
+
+                    # Acumular PnLDV_fwd si es válido
+                    if pnldv_result and pnldv_result.get('pnldv_fwd') is not None:
+                        pnldv_fwd_list.append(pnldv_result['pnldv_fwd'])
+
                 # Guardar datos del primer timestamp válido (para columnas originales sin _mediana)
                 if first_valid_timestamp is None:
                     first_valid_timestamp = ts_hhmm
                     first_net_credit = net_credit_val
                     first_pnl_pts = pnl_pts
                     first_pnl_pct = pct if denom_pts and np.isfinite(denom_pts) and denom_pts > 0 else None
+
+                    # Guardar primer PnLDV_fwd si está disponible
+                    if pnldv_fwd_list:  # Si ya se calculó al menos uno
+                        first_pnldv_fwd = pnldv_fwd_list[0]
 
                     # Timestamp forward
                     dt_us_fwd = datetime.strptime(f"{fwd_date_str_us} {ts_hhmm}", "%Y-%m-%d %H:%M").replace(tzinfo=TZ_US_local)
@@ -2189,6 +2366,11 @@ def _process_one_fwd_batman(args):
                 median_pnl_pct = round(float(np.median(pnl_pct_list)), 2)
                 result['fwd_data'][f"PnL_fwd_pct_{suf}_mediana"] = median_pnl_pct
 
+            # Mediana de PnLDV forward (nueva métrica)
+            if pnldv_fwd_list:
+                median_pnldv_fwd = round(float(np.median(pnldv_fwd_list)), 2)
+                result['fwd_data'][f"PnLDV_fwd_{suf}_mediana"] = median_pnldv_fwd
+
             # ============================================================
             # GUARDAR COLUMNAS ORIGINALES (primer timestamp válido)
             # ============================================================
@@ -2196,6 +2378,7 @@ def _process_one_fwd_batman(args):
                 result['fwd_data'][f"net_credit_fwd_{suf}"] = round(first_net_credit, 4)
                 result['fwd_data'][f"PnL_fwd_pts_{suf}"] = round(first_pnl_pts, 4)
                 result['fwd_data'][f"PnL_fwd_pct_{suf}"] = round(first_pnl_pct, 2) if first_pnl_pct is not None else None
+                result['fwd_data'][f"PnLDV_fwd_{suf}"] = round(first_pnldv_fwd, 2) if first_pnldv_fwd is not None else None
                 result['fwd_data'][f"dia_fwd_{suf}"] = first_dia_fwd
                 result['fwd_data'][f"hora_fwd_{suf}"] = first_hora_fwd
                 if first_spx_chg is not None:
