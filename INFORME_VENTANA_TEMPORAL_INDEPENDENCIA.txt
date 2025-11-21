@@ -1,0 +1,92 @@
+==========================================================================================
+ANÁLISIS DE VENTANA TEMPORAL PARA INDEPENDENCIA DE TRADES
+==========================================================================================
+
+PREGUNTA CENTRAL:
+¿Cuántos días deben pasar entre iniciar un trade T1+0 y otro trade T2+0
+para que sus resultados NO estén correlacionados?
+
+==========================================================================================
+RESPUESTA EJECUTIVA
+==========================================================================================
+
+⚠️  INDEPENDENCIA COMPLETA NO ALCANZADA
+
+   → Correlación mínima: 0.3245
+   → En ventana: 91-120 días días
+   → Se requieren gaps mayores a 120 días
+
+------------------------------------------------------------------------------------------
+EVOLUCIÓN DETALLADA DE LA CORRELACIÓN
+------------------------------------------------------------------------------------------
+
+Ventana Temporal     Correlación     R²           N Pares      Interpretación           
+------------------------------------------------------------------------------------------
+0 días                0.6125         0.3751       3653         MODERADA                 
+1-3 días              0.6329         0.4006       2252         MODERADA                 
+4-7 días              0.5722         0.3274       2576         MODERADA                 
+8-14 días             0.6083         0.3700       3435         MODERADA                 
+15-21 días            0.4956         0.2456       3465         DÉBIL                    
+22-30 días            0.5169         0.2672       3505         MODERADA                 
+31-45 días            0.5069         0.2570       3595         MODERADA                 
+46-60 días            0.4813         0.2317       3525         DÉBIL                    
+61-90 días            0.4091         0.1673       3535         DÉBIL                    
+91-120 días           0.3245         0.1053       3575         DÉBIL                    
+
+------------------------------------------------------------------------------------------
+INTERPRETACIÓN POR PERIODO
+------------------------------------------------------------------------------------------
+
+1. MISMO DÍA (0 días):
+   Correlación: 0.6125
+   → Trades iniciados el MISMO día están MUY correlacionados
+   → Confirma hallazgos del análisis anterior
+   → NO diversificación
+
+2. PRIMERA SEMANA (0-7 días):
+   Correlación promedio: 0.6059
+   → Correlación ALTA todavía
+   → Diversificación limitada
+
+3. 2-4 SEMANAS (8-30 días):
+   Correlación promedio: 0.5403
+   → Correlación todavía MODERADA
+   → Diversificación parcial
+
+4. MÁS DE 30 DÍAS:
+   Correlación promedio: 0.4305
+   → Correlación BAJA
+   → Excelente diversificación
+
+------------------------------------------------------------------------------------------
+RECOMENDACIONES ESTRATÉGICAS
+------------------------------------------------------------------------------------------
+
+📊 ESTRATEGIA MODERADA (Baja correlación):
+   → Espaciar trades 15+ días
+   → Correlación < 0.5
+   → Buena diversificación
+   → ~24 trades por año
+
+⚡ ESTRATEGIA AGRESIVA (Mayor frecuencia):
+   → Espaciar trades 7-14 días
+   → Correlación moderada/alta persiste
+   → Diversificación limitada
+   → Mayor exposición a condiciones de mercado
+
+------------------------------------------------------------------------------------------
+CONCLUSIONES FINALES
+------------------------------------------------------------------------------------------
+
+✓ Para REDUCIR significativamente la correlación:
+  → Espaciar entradas al menos 30-45 días
+  → Para independencia completa, considerar 60+ días
+
+REGLA DE ORO:
+  'No pongas todos tus huevos en la misma semana'
+
+  → Distribuir entradas a lo largo del tiempo es CLAVE
+  → La diversificación temporal es TAN importante como la diversificación de DTE
+  → El 'cuándo' importa más que el 'qué' configuración DTE uses
+
+==========================================================================================
