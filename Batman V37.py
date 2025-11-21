@@ -227,7 +227,7 @@ FILTER_FF_BAT_THRESHOLD = 99999999         # Umbral para gráficos de FF_BAT (Fo
                                        # NOTA: FF_BAT > 0 indica wings "calientes" vs forward implícita del centro
 
 # ================== CONFIG PROCESO ==================
-NUM_RANDOM_FILES = 2     # Número de archivos CSV a procesar aleatoriamente del directorio DATA_DIR
+NUM_RANDOM_FILES = 10     # Número de archivos CSV a procesar aleatoriamente del directorio DATA_DIR
                              # Útil para backtests rápidos sin procesar todo el histórico
                              # Ejemplo: 2 procesa 2 días aleatorios, 0 o None procesa TODOS los archivos
 THETA_TO_DAILY = 1.0/365.0   # Factor de conversión theta anual a diario (1/365)
@@ -1775,11 +1775,11 @@ def compute_FF_BAT(IV2_K2, T2_years, IV1_K1, IV1_K3, T1_years, vega_K1, vega_K3,
         return np.nan
 
 # ================== PNLDV FORWARD (Death Valley en momento FWD) ==================
-def compute_batman_metrics_forward(k1, k2, k3, iv1, iv2, iv3, dte1_fwd, dte2_fwd, r_base, net_credit_base):
+def compute_pnldv_forward(k1, k2, k3, iv1, iv2, iv3, dte1_fwd, dte2_fwd, r_base, net_credit_base):
     """
-    Calcula métricas Batman (Death Valley, PnLDV, EarL, EarR, BQI_ABS) en un momento forward.
+    Calcula Death Valley y PnLDV en un momento forward.
 
-    Esta función replica el cálculo de Death Valley, las orejas y BQI_ABS del momento T+0
+    Esta función replica el cálculo de Death Valley (líneas 1848-1866 de compute_strategy_metrics)
     pero aplicado a un momento futuro (forward) con DTEs reducidos e IVs actualizadas.
 
     Args:
@@ -1794,19 +1794,13 @@ def compute_batman_metrics_forward(k1, k2, k3, iv1, iv2, iv3, dte1_fwd, dte2_fwd
         dict: {
             'death_valley_fwd': float,  # Punto Death Valley forward (o NaN si fuera del spread)
             'pnldv_fwd': float,          # PnL en Death Valley (puntos SPX)
-            'EarL_fwd': float,           # Ganancia en oreja izquierda (spot=k1, puntos SPX)
-            'EarR_fwd': float,           # Ganancia en oreja derecha (spot=k3, puntos SPX)
-            'BQI_ABS_fwd': float,        # Batman Quality Index en momento forward
-            'EarScore_fwd': float,       # Score de orejas: sqrt(EarL × EarR)
-            'Asym_fwd': float,           # Asimetría: |EarL - EarR|
             'tau_fwd': float             # Diferencia temporal T2-T1 (años)
         }
 
     Notas:
-        - Si iv2 es None/NaN o tau_fwd <= 0, retorna None para la mayoría de métricas
+        - Si iv2 es None/NaN o tau_fwd <= 0, retorna None para death_valley_fwd y pnldv_fwd
         - El cálculo asume estructura Batman: -1C@k1(T1) +2C@k2(T2) -1C@k3(T1)
         - Death Valley es el punto donde la estructura tiene máxima pérdida al vencimiento T1
-        - BQI_ABS usa los mismos coeficientes que en T+0 (OFFSET_BASE=1000, SCALE_FACTOR=10, etc.)
     """
     try:
         # Calcular tiempos en años
@@ -1819,11 +1813,6 @@ def compute_batman_metrics_forward(k1, k2, k3, iv1, iv2, iv3, dte1_fwd, dte2_fwd
             return {
                 'death_valley_fwd': None,
                 'pnldv_fwd': None,
-                'EarL_fwd': None,
-                'EarR_fwd': None,
-                'BQI_ABS_fwd': None,
-                'EarScore_fwd': None,
-                'Asym_fwd': None,
                 'tau_fwd': tau_fwd
             }
 
@@ -1846,44 +1835,9 @@ def compute_batman_metrics_forward(k1, k2, k3, iv1, iv2, iv3, dte1_fwd, dte2_fwd
             value_t1_fwd = val_short1 + val_short3 + val_long2
             pnldv_fwd = value_t1_fwd - net_credit_base
 
-            # Calcular orejas forward (EarL y EarR)
-            # EarL: Ganancia si spot llega a k1 al vencimiento T1
-            # Fórmula (línea 1958): 2*bs_call_price(k1, k2, tau, r, iv2) - net_credit
-            EarL_fwd = 2.0 * bs_call_price(float(k1), float(k2), tau_fwd, r_base, sigma2, q=0.0) - net_credit_base
-
-            # EarR: Ganancia si spot llega a k3 al vencimiento T1
-            # Fórmula (línea 1959): (-(k3 - k1)) + 2*bs_call_price(k3, k2, tau, r, iv2) - net_credit
-            EarR_fwd = (-(float(k3) - float(k1))) + 2.0 * bs_call_price(float(k3), float(k2), tau_fwd, r_base, sigma2, q=0.0) - net_credit_base
-
-            # Calcular BQI_ABS forward (usando constantes de líneas 4969-4988)
-            EPS = 1e-6
-            Wv = 1.0
-            Wa = 0.35
-            OFFSET_BASE = 1000.0
-            SCALE_FACTOR = 10.0
-
-            # Componentes de BQI_ABS
-            EL = max(EarL_fwd, 0.0)
-            ER = max(EarR_fwd, 0.0)
-            EarScore_fwd = math.sqrt(EL * ER)
-            ValleyDepth_fwd = max(-pnldv_fwd, 0.0)
-            Asym_fwd = abs(EL - ER)
-
-            # Cálculo bifurcado de BQI_ABS
-            if pnldv_fwd >= 0:
-                BQI_ABS_fwd = OFFSET_BASE + (pnldv_fwd / SCALE_FACTOR)
-            else:
-                BQI_ABS_fwd = EarScore_fwd / (EPS + Wv * ValleyDepth_fwd + Wa * Asym_fwd)
-                BQI_ABS_fwd = min(BQI_ABS_fwd, OFFSET_BASE - 1.0)
-
             return {
                 'death_valley_fwd': round(S0_fwd, 2),
                 'pnldv_fwd': round(pnldv_fwd, 2),
-                'EarL_fwd': round(EarL_fwd, 2),
-                'EarR_fwd': round(EarR_fwd, 2),
-                'BQI_ABS_fwd': round(BQI_ABS_fwd, 2),
-                'EarScore_fwd': round(EarScore_fwd, 2),
-                'Asym_fwd': round(Asym_fwd, 2),
                 'tau_fwd': round(tau_fwd, 6)
             }
         else:
@@ -1892,37 +1846,9 @@ def compute_batman_metrics_forward(k1, k2, k3, iv1, iv2, iv3, dte1_fwd, dte2_fwd
             value_lim = (float(k1) + float(k3)) - 2.0 * float(k2) * math.exp(-r_base * tau_fwd)
             pnldv_fwd = value_lim - net_credit_base
 
-            # Calcular orejas forward (incluso si DV está fuera del spread)
-            EarL_fwd = 2.0 * bs_call_price(float(k1), float(k2), tau_fwd, r_base, sigma2, q=0.0) - net_credit_base
-            EarR_fwd = (-(float(k3) - float(k1))) + 2.0 * bs_call_price(float(k3), float(k2), tau_fwd, r_base, sigma2, q=0.0) - net_credit_base
-
-            # Calcular BQI_ABS forward
-            EPS = 1e-6
-            Wv = 1.0
-            Wa = 0.35
-            OFFSET_BASE = 1000.0
-            SCALE_FACTOR = 10.0
-
-            EL = max(EarL_fwd, 0.0)
-            ER = max(EarR_fwd, 0.0)
-            EarScore_fwd = math.sqrt(EL * ER)
-            ValleyDepth_fwd = max(-pnldv_fwd, 0.0)
-            Asym_fwd = abs(EL - ER)
-
-            if pnldv_fwd >= 0:
-                BQI_ABS_fwd = OFFSET_BASE + (pnldv_fwd / SCALE_FACTOR)
-            else:
-                BQI_ABS_fwd = EarScore_fwd / (EPS + Wv * ValleyDepth_fwd + Wa * Asym_fwd)
-                BQI_ABS_fwd = min(BQI_ABS_fwd, OFFSET_BASE - 1.0)
-
             return {
                 'death_valley_fwd': float('nan'),
                 'pnldv_fwd': round(pnldv_fwd, 2),
-                'EarL_fwd': round(EarL_fwd, 2),
-                'EarR_fwd': round(EarR_fwd, 2),
-                'BQI_ABS_fwd': round(BQI_ABS_fwd, 2),
-                'EarScore_fwd': round(EarScore_fwd, 2),
-                'Asym_fwd': round(Asym_fwd, 2),
                 'tau_fwd': round(tau_fwd, 6)
             }
 
@@ -1931,11 +1857,6 @@ def compute_batman_metrics_forward(k1, k2, k3, iv1, iv2, iv3, dte1_fwd, dte2_fwd
         return {
             'death_valley_fwd': None,
             'pnldv_fwd': None,
-            'EarL_fwd': None,
-            'EarR_fwd': None,
-            'BQI_ABS_fwd': None,
-            'EarScore_fwd': None,
-            'Asym_fwd': None,
             'tau_fwd': None
         }
 
@@ -2293,11 +2214,6 @@ def _process_one_fwd_batman(args):
             pnl_pts_list = []
             pnl_pct_list = []
             pnldv_fwd_list = []  # Acumulador para PnLDV forward
-            EarL_fwd_list = []   # Acumulador para EarL forward
-            EarR_fwd_list = []   # Acumulador para EarR forward
-            BQI_ABS_fwd_list = []  # Acumulador para BQI_ABS forward
-            EarScore_fwd_list = []  # Acumulador para EarScore forward
-            Asym_fwd_list = []   # Acumulador para Asym forward
 
             # Variables para guardar el primer timestamp válido (columnas originales)
             first_valid_timestamp = None
@@ -2309,11 +2225,6 @@ def _process_one_fwd_batman(args):
             first_hora_fwd = None
             first_leg_data = {}
             first_pnldv_fwd = None  # Primer PnLDV forward (sin mediana)
-            first_EarL_fwd = None   # Primer EarL forward (sin mediana)
-            first_EarR_fwd = None   # Primer EarR forward (sin mediana)
-            first_BQI_ABS_fwd = None  # Primer BQI_ABS forward (sin mediana)
-            first_EarScore_fwd = None  # Primer EarScore forward (sin mediana)
-            first_Asym_fwd = None   # Primer Asym forward (sin mediana)
 
             # ============================================================
             # LOOP: Evaluar estructura en los 14 timestamps fijos
@@ -2357,7 +2268,7 @@ def _process_one_fwd_batman(args):
                     pnl_pct_list.append(pct)
 
                 # ============================================================
-                # CALCULAR MÉTRICAS BATMAN FORWARD (PnLDV, EarL, EarR, BQI_ABS)
+                # CALCULAR PnLDV FORWARD (Death Valley en momento FWD)
                 # ============================================================
                 # Extraer IVs y DTEs calculados por batman_value_from_df
                 iv1_fwd = bv_details.get("leg1", {}).get("iv") if bv_details.get("leg1") else None
@@ -2366,10 +2277,10 @@ def _process_one_fwd_batman(args):
                 dte1_fwd = bv_details.get("dte1")
                 dte2_fwd = bv_details.get("dte2")
 
-                # Calcular métricas Batman forward si tenemos todos los datos necesarios
+                # Calcular PnLDV forward si tenemos todos los datos necesarios
                 if (iv1_fwd is not None and iv2_fwd is not None and iv3_fwd is not None and
                     dte1_fwd is not None and dte2_fwd is not None):
-                    batman_fwd_result = compute_batman_metrics_forward(
+                    pnldv_result = compute_pnldv_forward(
                         float(row_dict["k1"]),
                         float(row_dict["k2"]),
                         float(row_dict["k3"]),
@@ -2382,19 +2293,9 @@ def _process_one_fwd_batman(args):
                         base_credit
                     )
 
-                    # Acumular métricas si son válidas
-                    if batman_fwd_result and batman_fwd_result.get('pnldv_fwd') is not None:
-                        pnldv_fwd_list.append(batman_fwd_result['pnldv_fwd'])
-                    if batman_fwd_result and batman_fwd_result.get('EarL_fwd') is not None:
-                        EarL_fwd_list.append(batman_fwd_result['EarL_fwd'])
-                    if batman_fwd_result and batman_fwd_result.get('EarR_fwd') is not None:
-                        EarR_fwd_list.append(batman_fwd_result['EarR_fwd'])
-                    if batman_fwd_result and batman_fwd_result.get('BQI_ABS_fwd') is not None:
-                        BQI_ABS_fwd_list.append(batman_fwd_result['BQI_ABS_fwd'])
-                    if batman_fwd_result and batman_fwd_result.get('EarScore_fwd') is not None:
-                        EarScore_fwd_list.append(batman_fwd_result['EarScore_fwd'])
-                    if batman_fwd_result and batman_fwd_result.get('Asym_fwd') is not None:
-                        Asym_fwd_list.append(batman_fwd_result['Asym_fwd'])
+                    # Acumular PnLDV_fwd si es válido
+                    if pnldv_result and pnldv_result.get('pnldv_fwd') is not None:
+                        pnldv_fwd_list.append(pnldv_result['pnldv_fwd'])
 
                 # Guardar datos del primer timestamp válido (para columnas originales sin _mediana)
                 if first_valid_timestamp is None:
@@ -2403,19 +2304,9 @@ def _process_one_fwd_batman(args):
                     first_pnl_pts = pnl_pts
                     first_pnl_pct = pct if denom_pts and np.isfinite(denom_pts) and denom_pts > 0 else None
 
-                    # Guardar primeras métricas Batman FWD si están disponibles
-                    if pnldv_fwd_list:
+                    # Guardar primer PnLDV_fwd si está disponible
+                    if pnldv_fwd_list:  # Si ya se calculó al menos uno
                         first_pnldv_fwd = pnldv_fwd_list[0]
-                    if EarL_fwd_list:
-                        first_EarL_fwd = EarL_fwd_list[0]
-                    if EarR_fwd_list:
-                        first_EarR_fwd = EarR_fwd_list[0]
-                    if BQI_ABS_fwd_list:
-                        first_BQI_ABS_fwd = BQI_ABS_fwd_list[0]
-                    if EarScore_fwd_list:
-                        first_EarScore_fwd = EarScore_fwd_list[0]
-                    if Asym_fwd_list:
-                        first_Asym_fwd = Asym_fwd_list[0]
 
                     # Timestamp forward
                     dt_us_fwd = datetime.strptime(f"{fwd_date_str_us} {ts_hhmm}", "%Y-%m-%d %H:%M").replace(tzinfo=TZ_US_local)
@@ -2475,30 +2366,10 @@ def _process_one_fwd_batman(args):
                 median_pnl_pct = round(float(np.median(pnl_pct_list)), 2)
                 result['fwd_data'][f"PnL_fwd_pct_{suf}_mediana"] = median_pnl_pct
 
-            # Medianas de métricas Batman forward
+            # Mediana de PnLDV forward (nueva métrica)
             if pnldv_fwd_list:
                 median_pnldv_fwd = round(float(np.median(pnldv_fwd_list)), 2)
                 result['fwd_data'][f"PnLDV_fwd_{suf}_mediana"] = median_pnldv_fwd
-
-            if EarL_fwd_list:
-                median_EarL_fwd = round(float(np.median(EarL_fwd_list)), 2)
-                result['fwd_data'][f"EarL_fwd_{suf}_mediana"] = median_EarL_fwd
-
-            if EarR_fwd_list:
-                median_EarR_fwd = round(float(np.median(EarR_fwd_list)), 2)
-                result['fwd_data'][f"EarR_fwd_{suf}_mediana"] = median_EarR_fwd
-
-            if BQI_ABS_fwd_list:
-                median_BQI_ABS_fwd = round(float(np.median(BQI_ABS_fwd_list)), 2)
-                result['fwd_data'][f"BQI_ABS_fwd_{suf}_mediana"] = median_BQI_ABS_fwd
-
-            if EarScore_fwd_list:
-                median_EarScore_fwd = round(float(np.median(EarScore_fwd_list)), 2)
-                result['fwd_data'][f"EarScore_fwd_{suf}_mediana"] = median_EarScore_fwd
-
-            if Asym_fwd_list:
-                median_Asym_fwd = round(float(np.median(Asym_fwd_list)), 2)
-                result['fwd_data'][f"Asym_fwd_{suf}_mediana"] = median_Asym_fwd
 
             # ============================================================
             # GUARDAR COLUMNAS ORIGINALES (primer timestamp válido)
@@ -2508,11 +2379,6 @@ def _process_one_fwd_batman(args):
                 result['fwd_data'][f"PnL_fwd_pts_{suf}"] = round(first_pnl_pts, 4)
                 result['fwd_data'][f"PnL_fwd_pct_{suf}"] = round(first_pnl_pct, 2) if first_pnl_pct is not None else None
                 result['fwd_data'][f"PnLDV_fwd_{suf}"] = round(first_pnldv_fwd, 2) if first_pnldv_fwd is not None else None
-                result['fwd_data'][f"EarL_fwd_{suf}"] = round(first_EarL_fwd, 2) if first_EarL_fwd is not None else None
-                result['fwd_data'][f"EarR_fwd_{suf}"] = round(first_EarR_fwd, 2) if first_EarR_fwd is not None else None
-                result['fwd_data'][f"BQI_ABS_fwd_{suf}"] = round(first_BQI_ABS_fwd, 2) if first_BQI_ABS_fwd is not None else None
-                result['fwd_data'][f"EarScore_fwd_{suf}"] = round(first_EarScore_fwd, 2) if first_EarScore_fwd is not None else None
-                result['fwd_data'][f"Asym_fwd_{suf}"] = round(first_Asym_fwd, 2) if first_Asym_fwd is not None else None
                 result['fwd_data'][f"dia_fwd_{suf}"] = first_dia_fwd
                 result['fwd_data'][f"hora_fwd_{suf}"] = first_hora_fwd
                 if first_spx_chg is not None:
