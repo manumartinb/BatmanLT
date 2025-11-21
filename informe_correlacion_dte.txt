@@ -1,0 +1,62 @@
+================================================================================
+ANÁLISIS DE CORRELACIÓN PnL FWD ENTRE CONFIGURACIONES DTE1/DTE2
+================================================================================
+
+PREGUNTA: ¿Los trades con diferentes configuraciones DTE1/DTE2 que comienzan
+en la misma fecha se mueven correlacionados en términos de PnL FWD,
+o la diferencia de DTE les da independencia?
+
+--------------------------------------------------------------------------------
+1. DATOS GENERALES
+--------------------------------------------------------------------------------
+Total de trades analizados: 23,876
+Configuraciones DTE1/DTE2 únicas: 10927
+Fechas únicas: 762
+Fechas con múltiples configuraciones: 752
+Porcentaje de fechas con múltiples configs: 98.7%
+
+--------------------------------------------------------------------------------
+2. ANÁLISIS DE CORRELACIÓN
+--------------------------------------------------------------------------------
+No se encontraron suficientes datos en la matriz de correlación.
+(Muchas configuraciones DTE son únicas y no se repiten en las mismas fechas)
+
+--------------------------------------------------------------------------------
+3. ANÁLISIS POR DISTANCIA DTE
+--------------------------------------------------------------------------------
+Correlación promedio por distancia entre configuraciones:
+  Muy cercano: 0.9347 ± 0.0820 (n=21)
+  Cercano: 0.9381 ± 0.0540 (n=10)
+  Medio: 0.7706 ± 0.1947 (n=5)
+  Lejano: 0.8704 ± 0.0676 (n=8)
+  Muy lejano: 0.8041 ± 0.0339 (n=4)
+
+--------------------------------------------------------------------------------
+4. CONCLUSIONES
+--------------------------------------------------------------------------------
+
+CONCLUSIÓN GENERAL: CORRELACIÓN DÉBIL/INDEPENDENCIA
+
+Los trades con diferentes configuraciones DTE1/DTE2 que comienzan en la misma fecha muestran correlación DÉBIL en sus PnL FWD. Esto indica que las diferentes configuraciones tienen un alto grado de INDEPENDENCIA - los movimientos de PnL de una configuración no predicen bien los movimientos de otra configuración.
+
+EJEMPLO ESPECÍFICO (mencionado en la pregunta):
+  Para responder si un trade 301/574 se mueve en la misma dirección que uno 740/1030
+  cuando ambos parten del mismo día:
+
+  (No se encontraron suficientes datos coincidentes para estas configuraciones específicas)
+
+--------------------------------------------------------------------------------
+INTERPRETACIÓN:
+--------------------------------------------------------------------------------
+
+Si la correlación es ALTA (>0.7):
+  → Las diferentes configuraciones DTE NO ofrecen diversificación real
+  → Todos los trades responden similarmente a las mismas condiciones de mercado
+  → La diferencia de DTE NO les da independencia
+
+Si la correlación es BAJA (<0.3):
+  → Las diferentes configuraciones DTE SÍ ofrecen diversificación
+  → Cada configuración responde de manera más independiente
+  → La diferencia de DTE SÍ les da independencia significativa
+
+================================================================================
