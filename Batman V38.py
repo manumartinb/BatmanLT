@@ -227,7 +227,7 @@ FILTER_FF_BAT_THRESHOLD = 99999999         # Umbral para gráficos de FF_BAT (Fo
                                        # NOTA: FF_BAT > 0 indica wings "calientes" vs forward implícita del centro
 
 # ================== CONFIG PROCESO ==================
-NUM_RANDOM_FILES = 10     # Número de archivos CSV a procesar aleatoriamente del directorio DATA_DIR
+NUM_RANDOM_FILES = 2     # Número de archivos CSV a procesar aleatoriamente del directorio DATA_DIR
                              # Útil para backtests rápidos sin procesar todo el histórico
                              # Ejemplo: 2 procesa 2 días aleatorios, 0 o None procesa TODOS los archivos
 THETA_TO_DAILY = 1.0/365.0   # Factor de conversión theta anual a diario (1/365)
